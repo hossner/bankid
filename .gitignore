@@ -2,12 +2,9 @@
 *.so
 *.dylib
 *.test
+main
 
 # Output of the go coverage tool
 *.out
 
-# Certificate files
-*.pfx
-*.crt
-*.key
 
