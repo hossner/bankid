@@ -1,0 +1,13 @@
+# Binaries
+*.so
+*.dylib
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Certificate files
+*.pfx
+*.crt
+*.key
+

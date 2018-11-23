@@ -1,0 +1,21 @@
+{
+	"certStore":{
+		"userPrivateKeyPassword":"qwerty123",
+		"caCertFileName":"ca.crt",
+		"userCertFileName":"client.crt",
+		"userPrivateKeyFileName":"client.key",
+		"userP12FileName":"client.pfx",
+		"certStorePath":"certstore"
+	},
+	"httpClientConfig":{
+		"requestHeader":{
+			"Host":"appapi2.bankid.com",
+			"Content-type":"application/json"
+		}
+	},
+	"serviceUrl":"https://appapi2.test.bankid.com/rp/v5",
+	"pollDelay":2000,
+	"logFile":"/tmp/bankid.log",
+	"keyValueStore":"bankid_kvs.db",
+	"enableLogging":false
+}
