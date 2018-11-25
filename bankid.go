@@ -4,8 +4,8 @@ package bankid
 /*
  - Implement Connection.CancelRequest method
  - Implement logging
- - Get length of transactionID string from config
- - Improve entropy at transactionID generation
+ - Get length of sessionID string from config
+ - Improve entropy at sessionID generation
  - Break up the handleAuthSignRequest method
 */
 
@@ -20,6 +20,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/hossner/bankid/internal/config"
@@ -29,7 +30,7 @@ import (
 const (
 	version          = "0.1"
 	internalErrorMsg = "error"
-	transactionIDLen = 16 // Todo: Get length of transactionID from config file
+	sessionIDLen     = 16 // Todo: Get length of sessionID from config file
 	letterBytes      = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
 
@@ -65,7 +66,7 @@ type Requirements struct {
 }
 
 // FOnResponse is used to return the response struct after a auth/sign request
-// Returns: transactionID, status, message
+// Returns: sessionID, status, message
 type FOnResponse func(string, string, string)
 
 // New returns a server connection. If a connection exists it is reused
@@ -96,32 +97,32 @@ func New(configFileName string, responseCallBack FOnResponse) (*Connection, erro
 }
 
 // SendRequest sends an auth/sign request to the BankID server. If textToBeSigned is provided it is a sign request,
-// otherwise it's an authentication request. Returns a transaction ID; the transactionID parameter if provided,
+// otherwise it's an authentication request. Returns a session ID; the sessionID parameter if provided,
 // otherwise a generated one
-func (sc *Connection) SendRequest(endUserIP, textToBeSigned, transactionID string, requirements *Requirements) string {
-	// If transactionID is empty string, a new transaction ID is generated
-	if transactionID == "" {
-		transactionID = genRandBytes(transactionIDLen) // Generate a random string here...
+func (sc *Connection) SendRequest(endUserIP, sessionID, textToBeSigned string, requirements *Requirements) string {
+	// If sessionID is empty string, a new session ID is generated
+	if sessionID == "" {
+		sessionID = genRandBytes(sessionIDLen) // Generate a random string here...
 	}
-	// Todo: Check max length for transactionID (configurable?)
+	// Todo: Check max length for sessionID (configurable?)
 	ch := make(chan byte, 1)
-	sc.transQueues[transactionID] = ch
-	go sc.handleAuthSignRequest(endUserIP, textToBeSigned, transactionID, requirements, ch)
-	return transactionID
+	sc.transQueues[sessionID] = ch
+	go sc.handleAuthSignRequest(endUserIP, textToBeSigned, sessionID, requirements, ch)
+	return sessionID
 }
 
-// CancelRequest cancels an ongoing transaction
-func (sc *Connection) CancelRequest(transactionID string) {
-	if _, ex := sc.orderRefs[transactionID]; !ex {
-		sc.funcOnResponse(transactionID, internalErrorMsg, "no transaction with provided ID")
+// CancelRequest cancels an ongoing session
+func (sc *Connection) CancelRequest(sessionID string) {
+	if _, ex := sc.orderRefs[sessionID]; !ex {
+		sc.funcOnResponse(sessionID, internalErrorMsg, "no session with provided ID")
 		return
 	}
-	delete(sc.orderRefs, transactionID)
-	sc.transQueues[transactionID] <- 1
+	delete(sc.orderRefs, sessionID)
+	sc.transQueues[sessionID] <- 1
 }
 
 // Close the Connection
-func (sc *Connection) Close(transactionID string) {
+func (sc *Connection) Close() {
 	// Todo: Loop through sc.transQueues and cancel any ongoing requests...
 }
 
@@ -134,85 +135,85 @@ func (sc *Connection) Close(transactionID string) {
 // handleAuthSignRequest is called as a go routine. Veryfies the request and, if validated,
 // transmits it to the server
 // Todo: Break this method up in pieces...
-func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, transactionID string, requirements *Requirements, queue chan byte) {
+func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, sessionID string, requirements *Requirements, queue chan byte) {
 	if ip := net.ParseIP(endUserIP); ip == nil {
-		sc.funcOnResponse(transactionID, internalErrorMsg, "invalid IP address")
+		sc.funcOnResponse(sessionID, internalErrorMsg, "invalid IP address")
 		return
 	}
-	// Todo: Validate that the transactionID is recognized
+	// Todo: Validate that the sessionID is recognized
 	if err := requirements.validate(textToBeSigned); err != nil {
-		sc.funcOnResponse(transactionID, internalErrorMsg, err.Error())
+		sc.funcOnResponse(sessionID, internalErrorMsg, err.Error())
 		return
 	}
 	// Create and populate the auth/sign request going to the server...
-	reqType, jsonStr, err := requestToJSON(endUserIP, textToBeSigned, transactionID, requirements)
+	reqType, jsonStr, err := requestToJSON(endUserIP, textToBeSigned, sessionID, requirements)
 	if err != nil {
-		sc.funcOnResponse(transactionID, internalErrorMsg, err.Error())
+		sc.funcOnResponse(sessionID, internalErrorMsg, err.Error())
 		return
 	}
 	// Handle the initial request/response with the server...
 	code, resp, err := sc.transmitRequest(reqType, jsonStr)
 	if err != nil {
-		sc.funcOnResponse(transactionID, internalErrorMsg, err.Error())
+		sc.funcOnResponse(sessionID, internalErrorMsg, err.Error())
 		return
 	}
 	if code != 200 {
 		er, msg := handleServerError(code, resp)
-		sc.funcOnResponse(transactionID, er, msg)
+		sc.funcOnResponse(sessionID, er, msg)
 		return
 	}
 	var sr serverResponse
 	err = json.Unmarshal(resp, &sr)
 	if err != nil {
-		sc.funcOnResponse(transactionID, internalErrorMsg, err.Error())
+		sc.funcOnResponse(sessionID, internalErrorMsg, err.Error())
 		return
 	}
 	// Return the autoStartToken to the caller...
-	sc.funcOnResponse(transactionID, "sent", sr.AutoStartToken)
+	sc.funcOnResponse(sessionID, "sent", sr.AutoStartToken)
 	or := sr.OrderRef
-	sc.orderRefs[transactionID] = or
+	sc.orderRefs[sessionID] = or
 	// Start polling the server while status is pending
 	oldStat := sr.Status
 	oldHint := sr.HintCode
 	collecting := true
-	// for sr.Status == "pending" || sr.Status == "" {
 	for collecting {
 		select {
 		case _ = <-queue:
 			code, resp, err = sc.transmitRequest("cancel", []byte(`{"orderRef":"`+or+`"}`))
 			if err != nil {
-				sc.funcOnResponse(transactionID, internalErrorMsg, err.Error())
+				sc.funcOnResponse(sessionID, internalErrorMsg, err.Error())
 				return
 			}
 			if code != 200 {
 				er, msg := handleServerError(code, resp)
-				sc.funcOnResponse(transactionID, er, msg)
+				sc.funcOnResponse(sessionID, er, msg)
 				return
 			}
-			delete(sc.transQueues, transactionID)
-			sc.funcOnResponse(transactionID, "cancelled", "")
+			delete(sc.transQueues, sessionID)
+			sc.funcOnResponse(sessionID, "cancelled", "")
 			collecting = false
 		default:
 			code, resp, err = sc.transmitRequest("collect", []byte(`{"orderRef":"`+or+`"}`))
 			if err != nil {
-				sc.funcOnResponse(transactionID, internalErrorMsg, err.Error())
+				sc.funcOnResponse(sessionID, internalErrorMsg, err.Error())
 				return
 			}
 			if code != 200 {
 				er, msg := handleServerError(code, resp)
-				sc.funcOnResponse(transactionID, er, msg)
+				sc.funcOnResponse(sessionID, er, msg)
 				return
 			}
 			err = json.Unmarshal(resp, &sr)
 			if err != nil {
-				sc.funcOnResponse(transactionID, internalErrorMsg, err.Error())
+				sc.funcOnResponse(sessionID, internalErrorMsg, err.Error())
 				return
 			}
 			if sr.Status != oldStat || sr.HintCode != oldHint {
-				sc.funcOnResponse(transactionID, sr.Status, sr.HintCode)
+				sc.funcOnResponse(sessionID, sr.Status, sr.HintCode)
 				oldStat = sr.Status
 				oldHint = sr.HintCode
 			}
+			collecting = sr.Status == "pending"
 			time.Sleep(time.Duration(sc.cfg.PollDelay) * time.Millisecond)
 		}
 	}
@@ -255,6 +256,12 @@ func (req *Requirements) validate(ttbs string) error {
 	   	AutoStartTokenRequired bool     `json:"autoStartTokenRequired,omitempty"`
 	   	AllowFingerprint       bool     `json:"allowFingerprint,omitempty"`
 	*/
+	if req == nil {
+		return nil
+	}
+	if _, err := strconv.Atoi(req.PersonalNumber); err != nil {
+		return errors.New("parameter personalNumber malformed")
+	}
 	if len(ttbs) > 40000 {
 		return errors.New("parameter userVisibleData data too long")
 	}
@@ -281,7 +288,7 @@ func (req *Requirements) validate(ttbs string) error {
 // authSignRequest is an internal structure to hold the auth/sign request, which is converted
 // to a JSON string before sent to the server
 type authSignRequest struct {
-	TransactionID      string        `json:"-"`
+	SessionID          string        `json:"-"`
 	PersonalNumber     string        `json:"personalNumber,omitempty"`     // 12 digits
 	EndUserIP          string        `json:"endUserIp"`                    // IPv4 or IPv6 format
 	UserVisibleData    string        `json:"userVisibleData,omitempty"`    // 2.000 bytes/chars
@@ -314,10 +321,10 @@ type serverError struct {
 }
 
 // requestToJSON takes the caller arguments, including ev. Requirements struct, and creates the JSON to be sent to the server
-func requestToJSON(endUserIP, textToBeSigned, transactionID string, requirements *Requirements) (string, []byte, error) {
+func requestToJSON(endUserIP, textToBeSigned, sessionID string, requirements *Requirements) (string, []byte, error) {
 	reqType := "auth"
 	var req authSignRequest
-	req.TransactionID = transactionID
+	req.SessionID = sessionID
 	req.EndUserIP = endUserIP
 	req.UserVisibleData = textToBeSigned
 	req.Requirement = requirements
