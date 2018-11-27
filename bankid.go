@@ -162,7 +162,7 @@ func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, sessionID
 		sc.funcOnResponse(sessionID, er, msg)
 		return
 	}
-	var sr serverResponse
+	var sr serverResponse // Should contain orderRef and autoStartToken
 	err = json.Unmarshal(resp, &sr)
 	if err != nil {
 		sc.funcOnResponse(sessionID, internalErrorMsg, err.Error())
@@ -173,12 +173,15 @@ func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, sessionID
 	or := sr.OrderRef
 	sc.orderRefs[sessionID] = or
 	// Start polling the server while status is pending
-	oldStat := sr.Status
-	oldHint := sr.HintCode
-	collecting := true
-	for collecting {
+	sr.Status = "pending"
+	sr.HintCode = ""
+	// oldStat := sr.Status   // Should be ""
+	oldHint := sr.HintCode // Should be ""
+	// collecting := true
+	// for collecting {
+	for sr.Status == "pending" {
 		select {
-		case _ = <-queue:
+		case _ = <-queue: // Cancel requested...
 			code, resp, err = sc.transmitRequest("cancel", []byte(`{"orderRef":"`+or+`"}`))
 			if err != nil {
 				sc.funcOnResponse(sessionID, internalErrorMsg, err.Error())
@@ -191,7 +194,8 @@ func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, sessionID
 			}
 			delete(sc.transQueues, sessionID)
 			sc.funcOnResponse(sessionID, "cancelled", "")
-			collecting = false
+			// collecting = false
+			return
 		default:
 			code, resp, err = sc.transmitRequest("collect", []byte(`{"orderRef":"`+or+`"}`))
 			if err != nil {
@@ -208,13 +212,16 @@ func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, sessionID
 				sc.funcOnResponse(sessionID, internalErrorMsg, err.Error())
 				return
 			}
-			if sr.Status != oldStat || sr.HintCode != oldHint {
+			if sr.Status == "pending" {
+				if sr.HintCode != oldHint {
+					sc.funcOnResponse(sessionID, sr.HintCode, sr.Status)
+					oldHint = sr.HintCode
+				}
+				time.Sleep(time.Duration(sc.cfg.PollDelay) * time.Millisecond)
+			} else { // "failed" or "complete"
 				sc.funcOnResponse(sessionID, sr.Status, sr.HintCode)
-				oldStat = sr.Status
-				oldHint = sr.HintCode
+				return
 			}
-			collecting = sr.Status == "pending"
-			time.Sleep(time.Duration(sc.cfg.PollDelay) * time.Millisecond)
 		}
 	}
 }
