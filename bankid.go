@@ -10,11 +10,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"io/ioutil"
-	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/rs/xid"
 
 	"github.com/hossner/bankid/internal/config"
 	"golang.org/x/crypto/pkcs12"
@@ -23,7 +24,6 @@ import (
 const (
 	version          = "0.1"
 	internalErrorMsg = "error"
-	sessionIDLen     = 16 // Todo: Get length of sessionID from config file
 	letterBytes      = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
 
@@ -84,7 +84,6 @@ func New(configFileName string, responseCallBack FOnResponse) (*Connection, erro
 	sc.httpClient = cl
 	sc.transQueues = make(map[string]chan byte)
 	sc.orderRefs = make(map[string]string)
-	rand.Seed(time.Now().UnixNano()) // Todo: Improve entropy
 	return &sc, nil
 }
 
@@ -94,7 +93,7 @@ func New(configFileName string, responseCallBack FOnResponse) (*Connection, erro
 func (sc *Connection) SendRequest(endUserIP, sessionID, textToBeSigned string, requirements *Requirements) string {
 	// If sessionID is empty string, a new session ID is generated
 	if sessionID == "" {
-		sessionID = genRandBytes(sessionIDLen) // Generate a random string here...
+		sessionID = xid.New().String()
 	}
 	// Todo: Check max length for sessionID (configurable?)
 	ch := make(chan byte, 1)
@@ -392,18 +391,4 @@ func getTLSConfig(cfg *config.Config) (*tls.Config, error) {
 		InsecureSkipVerify: true, // <- This to accept the self-signed CA cert
 	}
 	return tlsCfg, nil
-}
-
-/*
-=========================================================================================
-===================================== Helper funcs ====================================
-=========================================================================================
-*/
-
-func genRandBytes(n int) string {
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letterBytes[rand.Intn(len(letterBytes))]
-	}
-	return string(b)
 }
