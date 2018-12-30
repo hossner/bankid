@@ -91,27 +91,27 @@ func callBack(sessId, msg, detail string) {
 }
 
 func socketWriter(wsConn *websocket.Conn) {
-	fmt.Println("socketWriter started...")
+	// fmt.Println("socketWriter started...")
 	for {
 		msg := <-queueToClient
-		fmt.Println("socketWriter:", msg)
+		// fmt.Println("socketWriter:", msg)
 		wsConn.WriteJSON(msg)
 	}
 }
 
 // Listen to requests from the client and put them on the queue from the client
 func socketReader(wsConn *websocket.Conn) {
-	fmt.Println("socketReader started...")
+	// fmt.Println("socketReader started...")
 	for {
 		_, msg, err := wsConn.ReadMessage()
-		fmt.Println("socketReader receiving...")
+		// fmt.Println("socketReader receiving...")
 		if err != nil {
 			// This occurs when the client has sent a 'close' message
 			wsConn.Close()
 		}
 		var newMsg wsMsg
 		json.Unmarshal(msg, &newMsg)
-		fmt.Println("socketReader:", newMsg)
+		// fmt.Println("socketReader:", newMsg)
 		queueFromClient <- &newMsg
 	}
 }
