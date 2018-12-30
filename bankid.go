@@ -1,13 +1,6 @@
 package bankid
 
-// Todo:
-/*
- - Implement Connection.CancelRequest method
- - Implement logging
- - Get length of sessionID string from config
- - Improve entropy at sessionID generation
- - Break up the handleAuthSignRequest method
-*/
+// Package bankid provide structs and methods to access the Swedish BankID service through the v.5 appapi.
 
 import (
 	"bytes"
@@ -53,8 +46,7 @@ type Connection struct {
 	orderRefs      map[string]string
 }
 
-// Requirements is a struct that is used if the caller needs to specify requirements
-// for the sign/auth request
+// Requirements is used when specific requirements for the sign/auth request are needed.
 type Requirements struct {
 	PersonalNumber         string   `json:"-"`                    // 12 digits
 	UserNonVisibleData     string   `json:"-"`                    // 40.000 bytes/chars
