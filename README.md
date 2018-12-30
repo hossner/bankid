@@ -12,8 +12,8 @@ go get github.com/hossner/bankid
 ```
 
 ## Use case
-The purpose of this library is to provide a simple way for web apps to integrate with the [Swedish BankID service](https://www.bankid.com). The use case for doing so is:
-1. In your web app, define a call back function
+The purpose of this library is to provide a simple way for Go applications to integrate with the [Swedish BankID service](https://www.bankid.com). The use case for doing so is:
+1. Define a call back function
 
 ```go
 function myCallBack(sessionId, message, details string){
