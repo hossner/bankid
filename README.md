@@ -53,10 +53,10 @@ The ```serviceURL``` can be set to point to either the test endpoint or the prod
 The ```pollDelay``` value (in milliseconds) defines how often the BankID service should be polled for status updates for the ongoing requests. Values lower than 2000 (2 seconds) are not allowed and will default to 2000.
 
 ### ```logFile```
-Path to log file to be used by the library.
+Path to log file to be used by the library. If this value is set to empty string, logging is done to stderr.
 
-### ```enableLogging```
-Boolean value to enable/disable logging. Note that the log is not rotated in this version, so logging should only be enabled in debug purposes.
+### ```logLevel```
+Integer value 0-5 to enable/disable logging. A value of 0 disables logging, 1 equals debug logging, 2 warnings, 3 errors, 4 and 5 critical log messages. Note that the log is not rotated in this version, so logging should only be enabled in debug purposes.
 
 ## Auth/Sign requirements
 Specific requirements may be needed at Auth or Sign requests. These requirements can be provided as a pointer to a ```Requirement``` struct as an argument to the ```SendRequest``` method. The different members of the struct are briefly described below. For more information about the different requirements, plase see the [official documentation](https://www.bankid.com/rp/info).

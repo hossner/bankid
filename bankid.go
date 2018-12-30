@@ -11,8 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -28,13 +30,20 @@ const (
 	internalErrorMsg = "error"
 )
 
-var connection *Connection
+// The definition of log levels
+const (
+	DEBUG = iota
+	INFO
+	WARN
+	ERROR
+	FATAL
+	PANIC
+)
 
-/*
-=========================================================================================
-====================================== Exported =========================================
-=========================================================================================
-*/
+var logLevel = 0 // Loggin disabled by default
+var logFile *os.File
+var logLevels []string
+var connection *Connection
 
 // Connection holds the connection with the BankID server. The same connection will be
 // reused if multiple calls to 'New' are made.
@@ -63,6 +72,12 @@ type Requirements struct {
 // Returns: requestID, status, message
 type FOnResponse func(requestID, status, message string)
 
+/*
+=========================================================================================
+==================================== Connection =========================================
+=========================================================================================
+*/
+
 // New returns a server connection. If a connection allready exists, it will be reused
 func New(configFileName string, responseCallBack FOnResponse) (*Connection, error) {
 	if connection != nil { // Reuse if multiple calls are made. No hot reload of change of config in this version
@@ -73,10 +88,12 @@ func New(configFileName string, responseCallBack FOnResponse) (*Connection, erro
 	}
 	cfg, err := config.New(configFileName)
 	if err != nil {
-		return nil, fmt.Errorf("could not get create configuration: %v", err)
+		return nil, fmt.Errorf("could not create configuration: %v", err)
 	}
+	setupLoggin(cfg)
 	cl, err := getHTTPClient(cfg)
 	if err != nil {
+		logprint(ERROR, "could not create an HTTP client:", err.Error())
 		return nil, fmt.Errorf("could not create an HTTP client: %v", err)
 	}
 	var sc Connection
@@ -93,11 +110,11 @@ func New(configFileName string, responseCallBack FOnResponse) (*Connection, erro
 // otherwise it's an authentication request. Returns a request ID; the same as the requestID parameter if provided,
 // otherwise a generated one
 func (sc *Connection) SendRequest(endUserIP, requestID, textToBeSigned string, requirements *Requirements) string {
-	// If requestID is empty string, a new session ID is generated
 	if requestID == "" {
 		requestID = xid.New().String()
+		logprint(DEBUG, "requestID", requestID, "created")
 	}
-	// Todo: Check max length for requestID (configurable?)
+	logprint(DEBUG, requestID, ": new request to send")
 	ch := make(chan byte, 1)
 	sc.transQueues[requestID] = ch
 	go sc.handleAuthSignRequest(endUserIP, textToBeSigned, requestID, requirements, ch)
@@ -107,6 +124,7 @@ func (sc *Connection) SendRequest(endUserIP, requestID, textToBeSigned string, r
 // CancelRequest cancels an ongoing session
 func (sc *Connection) CancelRequest(requestID string) {
 	if _, ex := sc.orderRefs[requestID]; !ex {
+		logprint(WARN, requestID, ": could not cancel requestID", requestID, " - not found")
 		sc.funcOnResponse(requestID, internalErrorMsg, "no session with provided ID")
 		return
 	}
@@ -117,111 +135,130 @@ func (sc *Connection) CancelRequest(requestID string) {
 // Close the Connection
 func (sc *Connection) Close() {
 	// Todo: Loop through sc.transQueues and cancel any ongoing requests...
+	logprint(DEBUG, "log closing")
+	logFile.Close()
 }
 
-/*
-=========================================================================================
-==================================== Connection =========================================
-=========================================================================================
-*/
+func validateParameters(endUserIP, textToBeSigned, requestID string, requirements *Requirements) string {
+	if net.ParseIP(endUserIP) == nil {
+		logprint(ERROR, requestID, ": could not validate IP address", endUserIP)
+		return "invalid IP address: " + endUserIP
+	}
+	if textToBeSigned != "" {
+		if err := validateTTBS(textToBeSigned); err != nil {
+			logprint(ERROR, requestID, ": could not validate textToBeSigned:", err.Error())
+			return err.Error()
+		}
+	}
+	if requirements != nil {
+		logprint(DEBUG, requestID, ": requirements struct provided")
+		if err := validateRequirements(requirements); err != nil {
+			logprint(ERROR, requestID, ": could not validate requirements:", err.Error())
+			return err.Error()
+		}
+	}
+	logprint(DEBUG, requestID, ": parameters validated")
+	return ""
+}
 
 // handleAuthSignRequest is called as a go routine. Veryfies the request and, if validated,
 // transmits it to the server
 // Todo: Break this method up in pieces...
 func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, requestID string, requirements *Requirements, queue chan byte) {
-	if ip := net.ParseIP(endUserIP); ip == nil {
-		sc.funcOnResponse(requestID, internalErrorMsg, "invalid IP address")
+	if erMsg := validateParameters(endUserIP, textToBeSigned, requestID, requirements); erMsg != "" {
+		sc.funcOnResponse(requestID, internalErrorMsg, erMsg)
 		return
-	}
-	if textToBeSigned != "" {
-		if err := validateTTBS(textToBeSigned); err != nil {
-			sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
-			return
-		}
-	}
-	if requirements != nil {
-		if err := requirements.validate(); err != nil {
-			sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
-			return
-		}
 	}
 	// Create and populate the auth/sign request going to the server...
 	reqType, jsonStr, err := requestToJSON(endUserIP, textToBeSigned, requestID, requirements)
 	if err != nil {
+		logprint(ERROR, requestID, ": could not create JSON from request:", err.Error())
 		sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
 		return
 	}
 	// Handle the initial request/response with the server...
 	code, resp, err := sc.transmitRequest(reqType, jsonStr)
 	if err != nil {
+		logprint(ERROR, requestID, ": failed to transmit request:", err.Error())
 		sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
 		return
 	}
 	if code != 200 {
 		er, msg := handleServerError(code, resp)
+		logprint(ERROR, requestID, ": received HTTP error", strconv.Itoa(code), ":", er, msg)
 		sc.funcOnResponse(requestID, er, msg)
 		return
 	}
 	var sr serverResponse // Should contain orderRef and autoStartToken
 	err = json.Unmarshal(resp, &sr)
 	if err != nil {
+		logprint(ERROR, requestID, ": failed to JSON decode server response:", err.Error())
 		sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
 		return
 	}
-	// Return the autoStartToken to the caller...
 	sc.funcOnResponse(requestID, "sent", sr.AutoStartToken)
 	or := sr.OrderRef
 	sc.orderRefs[requestID] = or
-	// Start polling the server while status is pending
 	sr.Status = "pending"
 	sr.HintCode = ""
 	oldHint := sr.HintCode // Should be ""
 	for sr.Status == "pending" {
 		select {
 		case _ = <-queue: // Cancel requested...
+			logprint(DEBUG, requestID, ": received cancel command")
 			code, resp, err = sc.transmitRequest("cancel", []byte(`{"orderRef":"`+or+`"}`))
 			if err != nil {
+				logprint(ERROR, requestID, ": failed to send cancel request to server:", err.Error())
 				sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
 				return
 			}
 			if code != 200 {
 				er, msg := handleServerError(code, resp)
+				logprint(ERROR, requestID, ": received HTTP error", strconv.Itoa(code), ":", er, msg)
 				sc.funcOnResponse(requestID, er, msg)
 				return
 			}
 			delete(sc.transQueues, requestID)
+			logprint(DEBUG, requestID, ": cancelled")
 			sc.funcOnResponse(requestID, "cancelled", "")
 			return
 		default:
 			code, resp, err = sc.transmitRequest("collect", []byte(`{"orderRef":"`+or+`"}`))
 			if err != nil {
+				logprint(ERROR, requestID, ": failed to send collect request to server:", err.Error())
 				sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
 				return
 			}
 			if code != 200 {
 				er, msg := handleServerError(code, resp)
+				logprint(ERROR, requestID, ": received HTTP error", strconv.Itoa(code), ":", er, msg)
 				sc.funcOnResponse(requestID, er, msg)
 				return
 			}
 			err = json.Unmarshal(resp, &sr)
 			if err != nil {
+				logprint(ERROR, requestID, ": failed to JSON decode server response:", err.Error())
 				sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
 				return
 			}
 			switch sr.Status {
 			case "pending":
 				if sr.HintCode != oldHint {
+					logprint(DEBUG, requestID, ": status changed to", sr.HintCode)
 					sc.funcOnResponse(requestID, sr.HintCode, sr.Status)
 					oldHint = sr.HintCode
 				}
 				time.Sleep(time.Duration(sc.cfg.PollDelay) * time.Millisecond)
 			case "failed": // "failed" or "complete"
+				logprint(DEBUG, requestID, ": status changed to", sr.HintCode)
 				sc.funcOnResponse(requestID, sr.Status, sr.HintCode)
 				return
 			case "complete":
+				logprint(DEBUG, requestID, ": status changed to", sr.HintCode)
 				sc.funcOnResponse(requestID, sr.Status, sr.CompletionData.User.Name)
 				return
 			default:
+				logprint(DEBUG, requestID, ": unknown status", sr.Status, "in response from server")
 				sc.funcOnResponse(requestID, internalErrorMsg, "unknown status in response from server")
 				return
 			}
@@ -255,17 +292,7 @@ func (sc *Connection) transmitRequest(reqType string, jsonStr []byte) (int, []by
 // validateRequirements parses through the caller provided Requirements struct and checks to
 // verify that all parameters are correct. If so, a authSignRequestRequirements struct is
 // filled and the pointer to that struct is returned
-func (req *Requirements) validate() error {
-	/*
-	   type Requirements struct {
-	   	PersonalNumber         string   `json:"-"`                    // 12 digits
-	   	UserNonVisibleData     string   `json:"-"`                    // 40.000 bytes/chars
-	   	CardReader             string   `json:"cardReader,omitempty"` //"class1" or "class2"
-	   	CertificatePolicies    []string `json:"certificatePolicies,omitempty"`
-	   	IssuerCN               []string `json:"issuerCn,omitempty"`
-	   	AutoStartTokenRequired bool     `json:"autoStartTokenRequired,omitempty"`
-	   	AllowFingerprint       bool     `json:"allowFingerprint,omitempty"`
-	*/
+func validateRequirements(req *Requirements) error {
 	if _, err := strconv.Atoi(req.PersonalNumber); err != nil {
 		return errors.New("parameter personalNumber malformed")
 	}
@@ -323,10 +350,9 @@ type serverResponse struct {
 
 type serverError struct {
 	ErrorCode string `json:"errorCode"`
-	Details   string `json:"details"` // "alreadyInProgress", "invalidParameters", "unauthorized", "notFound", "requestTimeout", "unsupportedMediaType", "internalErrorMsg", "maintenance"
+	Details   string `json:"details"`
 }
 
-// requestToJSON takes the caller arguments, including ev. Requirements struct, and creates the JSON to be sent to the server
 func requestToJSON(endUserIP, textToBeSigned, requestID string, requirements *Requirements) (string, []byte, error) {
 	reqType := "auth"
 	var req authSignRequest
@@ -407,4 +433,38 @@ func validateTTBS(ttbs string) error {
 		return errors.New("parameter userVisibleData data too long")
 	}
 	return nil
+}
+
+func setupLoggin(cfg *config.Config) {
+	logLevel = cfg.LogLevel
+	logLevels = cfg.LogPrefixes
+	log.SetOutput(os.Stderr)
+	if cfg.LogLevel < 1 {
+		return
+	}
+	if cfg.LogFileName != "" {
+		lf, err := os.OpenFile(cfg.GetFilePath("logFile"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+		if err != nil {
+			logprint(ERROR, "could not open log file", cfg.GetFilePath("logFile"), ":", err.Error())
+			return
+		}
+		logFile = lf
+		log.SetOutput(lf)
+		logprint(DEBUG, "log started")
+	}
+}
+
+func logprint(lvl int, a ...string) {
+	if logLevel < 1 || lvl+1 < logLevel || lvl < 0 {
+		return
+	}
+	if lvl >= len(logLevels) {
+		lvl = len(logLevels)
+		log.Println("ERROR: missing log level prefixes in config file!")
+	}
+	if lvl < 0 {
+		log.Println("ERROR:", a)
+		return
+	}
+	log.Println(logLevels[lvl], a)
 }

@@ -17,5 +17,6 @@
 	"pollDelay":2000,
 	"logFile":"/tmp/bankid.log",
 	"keyValueStore":"bankid_kvs.db",
-	"enableLogging":false
+	"logLevel":3,
+	"logPrefixes":["DEBUG","INFO","WARN","ERROR","FATAL","PANIC"]
 }

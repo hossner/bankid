@@ -32,28 +32,29 @@ type Config struct {
 			ContentType string `json:"Content-type"`
 		} `json:"requestHeader"`
 	} `json:"httpClientConfig"`
-	ServiceURL    string `json:"serviceUrl"`
-	PollDelay     int    `json:"pollDelay"`
-	LogFileName   string `json:"logFile"`
-	EnableLogging bool   `json:"enableLogging"`
+	ServiceURL  string   `json:"serviceUrl"`
+	PollDelay   int      `json:"pollDelay"`
+	LogFileName string   `json:"logFile"`
+	LogLevel    int      `json:"logLevel"`
+	LogPrefixes []string `json:"logPrefixes"`
 }
 
 // New returns a pointer to a new instance of a Config struct, holding values from the config file cfgFileName
 func New(cfgFileName string) (*Config, error) {
 	myDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve working directory: %v\n", err)
+		return nil, fmt.Errorf("failed to retrieve working directory: %v", err)
 	}
 	if cfgFileName == "" {
 		cfgFileName = path.Join(myDir, defaultConfigFileName)
 	}
 	raw, err := ioutil.ReadFile(cfgFileName)
 	if err != nil {
-		return nil, fmt.Errorf("could not read file %s: %v\n", cfgFileName, err)
+		return nil, fmt.Errorf("could not read file %s: %v", cfgFileName, err)
 	}
 	var s Config
 	if err = json.Unmarshal(raw, &s); err != nil {
-		return nil, fmt.Errorf("could not unmarshal config file %s: %v\n", cfgFileName, err)
+		return nil, fmt.Errorf("could not unmarshal config file %s: %v", cfgFileName, err)
 	}
 	s.AppDir = myDir
 	if err := s.validate(); err != nil {
@@ -64,8 +65,6 @@ func New(cfgFileName string) (*Config, error) {
 
 // GetFilePath is used to get the absolute path to the specified item
 func (c *Config) GetFilePath(name string) string {
-	// Todo: If a absolute path is provided in the config file, then that should be returned. Otherwise
-	// the path should be relative to the location of the executable
 	switch name {
 	case "caCertFileName":
 		return fixPath(c.AppDir, c.CertStore.CertStorePath, c.CertStore.CACertFileName)
@@ -92,7 +91,7 @@ func (c *Config) validate() error {
 	if c.CertStore.UserCertFileName == "" {
 		return errors.New("UserCertFileName cannot be empty")
 	}
-	if c.EnableLogging && c.LogFileName == "" {
+	if c.LogLevel > 0 && c.LogFileName == "" {
 		return errors.New("LogFileName cannot be empty if EnableLogging is true")
 	}
 	return nil
