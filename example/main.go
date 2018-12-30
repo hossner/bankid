@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 
 	"github.com/hossner/bankid"
@@ -11,10 +12,19 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
 var bidConn *bankid.Connection
 var queueToClient = make(chan *wsMsg)
 var queueFromClient = make(chan *wsMsg)
 var upgrader = websocket.Upgrader{}
+
+var sessMap = make(map[string]chan *wsMsg)
+
+// type qMsg struct {
+// 	qid string
+// 	msg string
+// }
 
 type wsMsg struct {
 	Action string `json:"action"`
@@ -31,10 +41,12 @@ func main() {
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		// Upgrade the http request to a websocket
 		var conn, _ = upgrader.Upgrade(w, r, nil)
+		// Create a rand to id the queues to and from the client
+		qid := genRand()
 		// Start a go routine used to send requests to the web client
-		go socketWriter(conn)
+		go socketWriter(conn, qid)
 		// Start a go routine to listen to incomming requests from the web client
-		go socketReader(conn)
+		go socketReader(conn, qid)
 	})
 
 	// The config file name defaults by the library to 'config.json' in the application working directory
@@ -87,11 +99,12 @@ func callBack(sessId, msg, detail string) {
 	newMsg := wsMsg{Action: msg, Value: detail, SessID: sessId}
 	fmt.Println("callBack:", newMsg)
 	// In this example we just push the message to the client
-	queueToClient <- &newMsg
+	sessMap[sessId] <- &newMsg
+	// queueToClient <- &newMsg
 }
 
-func socketWriter(wsConn *websocket.Conn) {
-	fmt.Println("socketWriter started...")
+func socketWriter(wsConn *websocket.Conn, id string) {
+	fmt.Println("socketWriter started...", id)
 	for {
 		msg := <-queueToClient
 		fmt.Println("socketWriter:", msg)
@@ -100,8 +113,8 @@ func socketWriter(wsConn *websocket.Conn) {
 }
 
 // Listen to requests from the client and put them on the queue from the client
-func socketReader(wsConn *websocket.Conn) {
-	fmt.Println("socketReader started...")
+func socketReader(wsConn *websocket.Conn, id string) {
+	fmt.Println("socketReader started...", id)
 	for {
 		_, msg, err := wsConn.ReadMessage()
 		fmt.Println("socketReader receiving...")
@@ -130,4 +143,12 @@ func handleClient(bConn *bankid.Connection) {
 			fmt.Println("Unknown command:", "\""+msg.Action+"\"")
 		}
 	}
+}
+
+func genRand() string {
+	b := make([]byte, 10)
+	for i := range b {
+		b[i] = letterBytes[rand.Intn(len(letterBytes))]
+	}
+	return string(b)
 }

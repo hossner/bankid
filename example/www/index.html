@@ -6,7 +6,10 @@
    <body onload="loaded('Done!');">
       <h1>BankID authentication example</h1>
      Personal nr, 12 digits:<br>
-     <input id="pnr" type="text" value="121212121212" placeholder="YYYYMMDDNNNN"/>
+     <input id="pnr" type="text" value="" placeholder="YYYYMMDDNNNN"/>
      <input type="button" id="sendPNrBtn" value="Log in with p.nr." onclick="sendPnr(pnr.value);"></input>
+
+     <div id="status-div"></div>
+     <div id="long-status-div"></div>
    </body>
 </html>

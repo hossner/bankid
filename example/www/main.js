@@ -1,20 +1,22 @@
 var bidSocket
 var sessID = ""
 
-function loaded(msg){
-    console.log(msg);
+function loaded(){
     bidSocket = new WebSocket("ws://localhost:8080/ws")
-    var long = document.getElementById("long");
-    var lat = document.getElementById("lat");
+    var stat = document.getElementById("status-div");
+    var longstat = document.getElementById("long-status-div");
 
     var update = function(){
         bidSocket.onmessage = function (event) {
             msg = JSON.parse(event.data)
+            stat.textContent = msg.action
+            if (msg.action == "error"){
+                longstat.textContent = msg.value
+            } else {
+                longstat.textContent = ""
+            }
             console.log(msg.action)
             console.log(msg.value)
-        //   var longlatArr = event.data.split(" ");
-        //   long.textContent = longlatArr[1].toString();
-        //   lat.textContent = longlatArr[0].toString();
         }
       };
       window.setTimeout(update);
