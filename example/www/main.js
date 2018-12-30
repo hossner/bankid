@@ -2,7 +2,7 @@ var bidSocket
 var sessID = ""
 
 function loaded(){
-    bidSocket = new WebSocket("ws://localhost:8080/ws")
+    bidSocket = new WebSocket("ws://127.0.0.1:8080/ws")
     var stat = document.getElementById("status-div");
     var longstat = document.getElementById("long-status-div");
 

@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 
 	"github.com/hossner/bankid"
 	"github.com/rs/xid"
@@ -30,6 +32,7 @@ type wsMsg struct {
 	Action string `json:"action"`
 	Value  string `json:"value"`
 	SessID string `json:"id"`
+	IPAddr string
 }
 
 func main() {
@@ -51,7 +54,7 @@ func main() {
 		// Start a go routine used to send requests to the web client
 		go socketWriter(conn, qid)
 		// Start a go routine to listen to incomming requests from the web client
-		go socketReader(conn, qid)
+		go socketReader(conn, qid, getRealAddr(r))
 	})
 
 	// The config file name defaults by the library to 'config.json' in the application working directory
@@ -64,11 +67,11 @@ func main() {
 	defer bidConn.Close()
 
 	// Start a go routine to handle requests from clients
-	go handleClient(bidConn)
+	go handleClients(bidConn)
 
 	// Start web server, listening to port 8080
 	log.Println("Listening to port 8080...")
-	http.ListenAndServe(":8080", nil)
+	http.ListenAndServe("127.0.0.1:8080", nil)
 }
 
 // Incomming messages from the BankID connection are put on the queue to the client
@@ -120,7 +123,7 @@ func socketWriter(wsConn *websocket.Conn, id string) {
 }
 
 // Listen to requests from the client and put them on the queue from the client
-func socketReader(wsConn *websocket.Conn, id string) {
+func socketReader(wsConn *websocket.Conn, id, ip string) {
 	for {
 		_, msg, err := wsConn.ReadMessage()
 		if err != nil {
@@ -137,21 +140,41 @@ func socketReader(wsConn *websocket.Conn, id string) {
 			return
 		}
 		newMsg.SessID = id
+		newMsg.IPAddr = ip
 		queueFromClient <- &newMsg
 	}
 }
 
 // Poll the queueFromClient and send incomming messages to the server
-func handleClient(bConn *bankid.Connection) {
+func handleClients(bConn *bankid.Connection) {
 	for {
 		msg := <-queueFromClient
 		switch msg.Action {
 		case "pnrAuth":
 			// The web client sent a pnr and requests an authentication
 			reqs := bankid.Requirements{PersonalNumber: msg.Value}
-			bConn.SendRequest("100.231.180.9", msg.SessID, "", &reqs)
+			bConn.SendRequest(msg.IPAddr, msg.SessID, "", &reqs)
 		default:
 			log.Println("Unknown command:", "\""+msg.Action+"\"")
 		}
 	}
+}
+
+func getRealAddr(r *http.Request) string {
+	if xff := strings.Trim(r.Header.Get("X-Forwarded-For"), ","); len(xff) > 0 {
+		addrs := strings.Split(xff, ",")
+		lastFwd := addrs[len(addrs)-1]
+		if ip := net.ParseIP(lastFwd); ip != nil {
+			return ip.String()
+		}
+	}
+	if xri := r.Header.Get("X-Real-Ip"); len(xri) > 0 {
+		if ip := net.ParseIP(xri); ip != nil {
+			return ip.String()
+		}
+	}
+	if parts := strings.Split(r.RemoteAddr, ":"); len(parts) == 2 {
+		return parts[0]
+	}
+	return ""
 }
