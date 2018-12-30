@@ -3,8 +3,10 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
 )
 
@@ -36,24 +38,26 @@ type Config struct {
 	EnableLogging bool   `json:"enableLogging"`
 }
 
-// GetConfig is used to retrieve config from file.
-// Returns a pointer to a new instance of a Confog struct
-func GetConfig(cfgFileName string) (*Config, error) {
-	myDir, _ := filepath.Abs(filepath.Dir(os.Args[0]))
+// New returns a pointer to a new instance of a Config struct, holding values from the config file cfgFileName
+func New(cfgFileName string) (*Config, error) {
+	myDir, err := filepath.Abs(filepath.Dir(os.Args[0]))
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve working directory: %v\n", err)
+	}
 	if cfgFileName == "" {
-		cfgFileName = myDir + "/" + defaultConfigFileName
+		cfgFileName = path.Join(myDir, defaultConfigFileName)
 	}
 	raw, err := ioutil.ReadFile(cfgFileName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not read file %s: %v\n", cfgFileName, err)
 	}
 	var s Config
 	if err = json.Unmarshal(raw, &s); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not unmarshal config file %s: %v\n", cfgFileName, err)
 	}
 	s.AppDir = myDir
 	if err := s.validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid value in configuration file %s: %v", cfgFileName, err)
 	}
 	return &s, nil
 }
@@ -64,15 +68,15 @@ func (c *Config) GetFilePath(name string) string {
 	// the path should be relative to the location of the executable
 	switch name {
 	case "caCertFileName":
-		return c.AppDir + "/" + c.CertStore.CertStorePath + "/" + c.CertStore.CACertFileName
+		return fixPath(c.AppDir, c.CertStore.CertStorePath, c.CertStore.CACertFileName)
 	case "userCertFileName":
-		return c.AppDir + "/" + c.CertStore.CertStorePath + "/" + c.CertStore.UserCertFileName
+		return fixPath(c.AppDir, c.CertStore.CertStorePath, c.CertStore.UserCertFileName)
 	case "userPrivateKeyFileName":
-		return c.AppDir + "/" + c.CertStore.CertStorePath + "/" + c.CertStore.UserPrivateKeyFileName
+		return fixPath(c.AppDir, c.CertStore.CertStorePath, c.CertStore.UserPrivateKeyFileName)
 	case "userP12FileName":
-		return c.AppDir + "/" + c.CertStore.CertStorePath + "/" + c.CertStore.UserP12FileName
+		return fixPath(c.AppDir, c.CertStore.CertStorePath, c.CertStore.UserP12FileName)
 	case "logFile":
-		return c.AppDir + "/" + c.LogFileName
+		return fixPath(c.AppDir, "", c.LogFileName)
 	default:
 		return ""
 	}
@@ -80,7 +84,26 @@ func (c *Config) GetFilePath(name string) string {
 
 func (c *Config) validate() error {
 	if c.PollDelay < minPollDelay {
-		return errors.New("pollDelay in config too low (needs to be at least " + string(minPollDelay) + " ms)")
+		return errors.New("pollDelay is too low (needs to be at least " + string(minPollDelay) + ")")
+	}
+	if c.CertStore.CACertFileName == "" {
+		return errors.New("CACertFileName cannot be empty")
+	}
+	if c.CertStore.UserCertFileName == "" {
+		return errors.New("UserCertFileName cannot be empty")
+	}
+	if c.EnableLogging && c.LogFileName == "" {
+		return errors.New("LogFileName cannot be empty if EnableLogging is true")
 	}
 	return nil
+}
+
+func fixPath(rd, d, f string) string {
+	if path.IsAbs(f) {
+		return f
+	}
+	if path.IsAbs(d) {
+		return path.Join(d, f)
+	}
+	return path.Join(rd, d, f)
 }

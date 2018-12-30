@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
@@ -21,11 +20,6 @@ var upgrader = websocket.Upgrader{}
 
 var sessMap = make(map[string]chan *wsMsg)
 
-// type qMsg struct {
-// 	qid string
-// 	msg string
-// }
-
 type wsMsg struct {
 	Action string `json:"action"`
 	Value  string `json:"value"`
@@ -40,9 +34,14 @@ func main() {
 	// Set up handler for the websocket request from client
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		// Upgrade the http request to a websocket
-		var conn, _ = upgrader.Upgrade(w, r, nil)
-		// Create a rand to id the queues to and from the client
+		var conn, err = upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Fatalf("could not upgrade request to websocket: %v", err)
+		}
+		// Create a session ID for the queues to and from the client
 		qid := genRand()
+		// Create a channel to write server responses to, to the right session
+		sessMap[qid] = make(chan *wsMsg)
 		// Start a go routine used to send requests to the web client
 		go socketWriter(conn, qid)
 		// Start a go routine to listen to incomming requests from the web client
@@ -54,20 +53,20 @@ func main() {
 	// Create a new connection to the BankID server
 	bidConn, err := bankid.New(cfgFileName, callBack)
 	if err != nil {
-		log.Fatalln(err.Error())
+		log.Fatalf("failed to create a connection to the BankID service: %v", err)
 	}
 	defer bidConn.Close()
 
-	// Start a go routine to
+	// Start a go routine to handle requests from clients
 	go handleClient(bidConn)
 
 	// Start web server, listening to port 8080
-	fmt.Println("Listening to port 8080...")
+	log.Println("Listening to port 8080...")
 	http.ListenAndServe(":8080", nil)
 }
 
 // Incomming messages from the BankID connection are put on the queue to the client
-func callBack(sessId, msg, detail string) {
+func callBack(reqID, msg, detail string) {
 	/*
 		Possible values for 'msg':
 			Non error messages:
@@ -96,41 +95,47 @@ func callBack(sessId, msg, detail string) {
 				'startFailed':
 
 	*/
-	newMsg := wsMsg{Action: msg, Value: detail, SessID: sessId}
-	fmt.Println("callBack:", newMsg)
-	// In this example we just push the message to the client
-	sessMap[sessId] <- &newMsg
+	// Create a new instance of wsMsg to hold the values from the server
+	newMsg := wsMsg{Action: msg, Value: detail, SessID: reqID}
+	// In this example we just push the message to the client through the socketWriter
+	sessMap[reqID] <- &newMsg
 	// queueToClient <- &newMsg
 }
 
+// Poll the queueToClient and send incomming messages to the client
 func socketWriter(wsConn *websocket.Conn, id string) {
-	fmt.Println("socketWriter started...", id)
-	for {
-		msg := <-queueToClient
-		fmt.Println("socketWriter:", msg)
-		wsConn.WriteJSON(msg)
+	more := true
+	for more {
+		ms, more := <-sessMap[id]
+		if more {
+			wsConn.WriteJSON(ms)
+		}
 	}
 }
 
 // Listen to requests from the client and put them on the queue from the client
 func socketReader(wsConn *websocket.Conn, id string) {
-	fmt.Println("socketReader started...", id)
 	for {
 		_, msg, err := wsConn.ReadMessage()
-		fmt.Println("socketReader receiving...")
 		if err != nil {
-			// This occurs when the client has sent a 'close' message
+			// This occurs when the client has sent a 'close' message for the websocket
 			wsConn.Close()
+			close(sessMap[id])
+			sessMap[id] = nil
+			delete(sessMap, id)
 		}
 		var newMsg wsMsg
-		json.Unmarshal(msg, &newMsg)
-		fmt.Println("socketReader:", newMsg)
+		err = json.Unmarshal(msg, &newMsg)
+		if err != nil {
+			log.Printf("could not unmarshal request from web client: %v:\n", err)
+			return
+		}
+		newMsg.SessID = id
 		queueFromClient <- &newMsg
 	}
 }
 
-// Poll the queueToClient and send incomming messages to the client
-// Listen to the queueFromClient
+// Poll the queueFromClient and send incomming messages to the server
 func handleClient(bConn *bankid.Connection) {
 	for {
 		msg := <-queueFromClient
@@ -138,9 +143,9 @@ func handleClient(bConn *bankid.Connection) {
 		case "pnrAuth":
 			// The web client sent a pnr and requests an authentication
 			reqs := bankid.Requirements{PersonalNumber: msg.Value}
-			bConn.SendRequest("100.231.180.9", "", "", &reqs)
+			bConn.SendRequest("100.231.180.9", msg.SessID, "", &reqs)
 		default:
-			fmt.Println("Unknown command:", "\""+msg.Action+"\"")
+			log.Println("Unknown command:", "\""+msg.Action+"\"")
 		}
 	}
 }
