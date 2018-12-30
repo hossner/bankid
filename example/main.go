@@ -3,21 +3,27 @@ package main
 import (
 	"encoding/json"
 	"log"
-	"math/rand"
 	"net/http"
 
 	"github.com/hossner/bankid"
+	"github.com/rs/xid"
 
 	"github.com/gorilla/websocket"
 )
 
-const letterBytes = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
+// bidConn holds the connection with the server
 var bidConn *bankid.Connection
+
+// queueToClient is used to transfer messages from server (through call back function) to web client
 var queueToClient = make(chan *wsMsg)
+
+// queueFromClient is used to transfer messages from web client to server
 var queueFromClient = make(chan *wsMsg)
+
+// upgrader upgrades the HTTP connection to a websocket connection
 var upgrader = websocket.Upgrader{}
 
+// sessMap maps the client session IDs with the channels to correct go routine (that handles the web socket)
 var sessMap = make(map[string]chan *wsMsg)
 
 type wsMsg struct {
@@ -39,7 +45,7 @@ func main() {
 			log.Fatalf("could not upgrade request to websocket: %v", err)
 		}
 		// Create a session ID for the queues to and from the client
-		qid := genRand()
+		qid := xid.New().String()
 		// Create a channel to write server responses to, to the right session
 		sessMap[qid] = make(chan *wsMsg)
 		// Start a go routine used to send requests to the web client
@@ -148,12 +154,4 @@ func handleClient(bConn *bankid.Connection) {
 			log.Println("Unknown command:", "\""+msg.Action+"\"")
 		}
 	}
-}
-
-func genRand() string {
-	b := make([]byte, 10)
-	for i := range b {
-		b[i] = letterBytes[rand.Intn(len(letterBytes))]
-	}
-	return string(b)
 }
