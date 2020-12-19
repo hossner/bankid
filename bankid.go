@@ -4,8 +4,11 @@ package bankid
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -20,6 +23,7 @@ import (
 	"time"
 
 	"github.com/rs/xid"
+	"github.com/skip2/go-qrcode"
 
 	"github.com/hossner/bankid/internal/config"
 	"golang.org/x/crypto/pkcs12"
@@ -54,23 +58,29 @@ type Connection struct {
 	httpClient     *http.Client
 	transQueues    map[string]chan byte
 	orderRefs      map[string]string
+	qrQuits        map[string]chan struct{}
 	mu             sync.Mutex
 }
 
 // Requirements is used when specific requirements for the sign/auth request are needed.
 type Requirements struct {
-	PersonalNumber         string   `json:"-"`                    // 12 digits
-	UserNonVisibleData     string   `json:"-"`                    // 40.000 bytes/chars
-	CardReader             string   `json:"cardReader,omitempty"` //"class1" or "class2"
-	CertificatePolicies    []string `json:"certificatePolicies,omitempty"`
-	IssuerCN               []string `json:"issuerCn,omitempty"`
-	AutoStartTokenRequired bool     `json:"autoStartTokenRequired,omitempty"`
-	AllowFingerprint       bool     `json:"allowFingerprint,omitempty"`
+	PersonalNumber      string   `json:"-"`                    // 12 digits
+	UserNonVisibleData  string   `json:"-"`                    // 40.000 bytes/chars
+	CardReader          string   `json:"cardReader,omitempty"` //"class1" or "class2"
+	CertificatePolicies []string `json:"certificatePolicies,omitempty"`
+	IssuerCN            []string `json:"issuerCn,omitempty"`
+	// AutoStartTokenRequired bool     `json:"autoStartTokenRequired,omitempty"`
+	TokenStartRequired bool `json:"tokenStartRequired,omitempty"`
+	AllowFingerprint   bool `json:"allowFingerprint,omitempty"`
 }
 
 // FOnResponse is the call back function used to return status updates after a auth/sign request has been made
 // Returns: requestID, status, message
 type FOnResponse func(requestID, status, message string)
+
+// FOnNewQRCode is a call back function, used as an argument to SendRequest, that is called every second after
+// the request, providing a new QR code
+type FOnNewQRCode func(QRCode []byte, requestID string)
 
 /*
 =========================================================================================
@@ -103,13 +113,14 @@ func New(configFileName string, responseCallBack FOnResponse) (*Connection, erro
 	sc.httpClient = cl
 	sc.transQueues = make(map[string]chan byte)
 	sc.orderRefs = make(map[string]string)
+	sc.qrQuits = make(map[string]chan struct{})
 	return &sc, nil
 }
 
 // SendRequest sends an auth/sign request to the BankID server. If textToBeSigned is provided it is a sign request,
 // otherwise it's an authentication request. Returns a request ID; the same as the requestID parameter if provided,
 // otherwise a generated one
-func (sc *Connection) SendRequest(endUserIP, requestID, textToBeSigned string, requirements *Requirements) string {
+func (sc *Connection) SendRequest(endUserIP, requestID, textToBeSigned string, requirements *Requirements, onQRCodeFunc FOnNewQRCode) string {
 	if requestID == "" {
 		requestID = xid.New().String()
 		logprint(DEBUG, "requestID", requestID, "created")
@@ -117,7 +128,7 @@ func (sc *Connection) SendRequest(endUserIP, requestID, textToBeSigned string, r
 	logprint(DEBUG, requestID, ": new request to send")
 	ch := make(chan byte, 1)
 	sc.transQueues[requestID] = ch
-	go sc.handleAuthSignRequest(endUserIP, textToBeSigned, requestID, requirements, ch)
+	go sc.handleAuthSignRequest(endUserIP, textToBeSigned, requestID, requirements, ch, onQRCodeFunc)
 	return requestID
 }
 
@@ -161,10 +172,59 @@ func validateParameters(endUserIP, textToBeSigned, requestID string, requirement
 	return ""
 }
 
+func (sc *Connection) generateQRCode(qr1, qr2, requestID string, fOnCode FOnNewQRCode) chan struct{} {
+	if fOnCode == nil {
+		return nil
+	}
+
+	/*
+		qr1 = "67df3917-fa0d-44e5-b327-edcc928297f8"
+		qr2 = "d28db9a7-4cde-429e-a983-359be676944c"
+		nr := 0
+		var png []byte
+		h := hmac.New(sha256.New, []byte(qr2))
+		h.Write([]byte(strconv.Itoa(nr)))
+		png, _ = qrcode.Encode("bankid."+qr1+"."+strconv.Itoa(nr)+"."+hex.EncodeToString(h.Sum(nil)), qrcode.Low, -5)
+		fOnCode(png, requestID)
+		return nil
+	*/
+	nr := 0
+	ticker := time.NewTicker(1 * time.Second)
+	quit := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				var png []byte
+				h := hmac.New(sha256.New, []byte(qr2))
+				h.Write([]byte(strconv.Itoa(nr)))
+				png, err := qrcode.Encode("bankid."+qr1+"."+strconv.Itoa(nr)+"."+hex.EncodeToString(h.Sum(nil)), qrcode.Low, -5)
+				if err != nil {
+					logprint(ERROR, "", ": failed to generate QR code", err.Error())
+					sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
+				}
+				fOnCode(png, requestID)
+				nr++
+			case <-quit:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+	return quit
+
+}
+
+func cancelQRCode(ch chan struct{}, fnq FOnNewQRCode) {
+	if fnq != nil {
+		close(ch)
+	}
+}
+
 // handleAuthSignRequest is called as a go routine. Veryfies the request and, if validated,
 // transmits it to the server
 // Todo: Break this method up in pieces...
-func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, requestID string, requirements *Requirements, queue chan byte) {
+func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, requestID string, requirements *Requirements, queue chan byte, onQRCodeFunc FOnNewQRCode) {
 	if erMsg := validateParameters(endUserIP, textToBeSigned, requestID, requirements); erMsg != "" {
 		sc.funcOnResponse(requestID, internalErrorMsg, erMsg)
 		return
@@ -189,23 +249,27 @@ func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, requestID
 		sc.funcOnResponse(requestID, er, msg)
 		return
 	}
-	var sr serverResponse // Should contain orderRef and autoStartToken
+	var sr serverResponse // Should contain orderRef, autoStartToken, qrStartToken and qrStartSecret
 	err = json.Unmarshal(resp, &sr)
 	if err != nil {
 		logprint(ERROR, requestID, ": failed to JSON decode server response:", err.Error())
 		sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
 		return
 	}
-	sc.funcOnResponse(requestID, "sent", sr.AutoStartToken)
 	or := sr.OrderRef
 	sc.orderRefs[requestID] = or
 	sr.Status = "pending"
 	sr.HintCode = ""
 	oldHint := sr.HintCode // Should be ""
+	sc.funcOnResponse(requestID, "sent", sr.AutoStartToken)
+	if onQRCodeFunc != nil {
+		sc.qrQuits[requestID] = sc.generateQRCode(sr.QRStartToken, sr.QRStartSecret, requestID, onQRCodeFunc)
+	}
 	for sr.Status == "pending" {
 		select {
 		case _ = <-queue: // Cancel requested...
 			logprint(DEBUG, requestID, ": received cancel command")
+			cancelQRCode(sc.qrQuits[requestID], onQRCodeFunc)
 			code, resp, err = sc.transmitRequest("cancel", []byte(`{"orderRef":"`+or+`"}`))
 			if err != nil {
 				logprint(ERROR, requestID, ": failed to send cancel request to server:", err.Error())
@@ -226,11 +290,13 @@ func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, requestID
 			code, resp, err = sc.transmitRequest("collect", []byte(`{"orderRef":"`+or+`"}`))
 			if err != nil {
 				logprint(ERROR, requestID, ": failed to send collect request to server:", err.Error())
+				cancelQRCode(sc.qrQuits[requestID], onQRCodeFunc)
 				sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
 				return
 			}
 			if code != 200 {
 				er, msg := handleServerError(code, resp)
+				cancelQRCode(sc.qrQuits[requestID], onQRCodeFunc)
 				logprint(ERROR, requestID, ": received HTTP error", strconv.Itoa(code), ":", er, msg)
 				sc.funcOnResponse(requestID, er, msg)
 				return
@@ -238,6 +304,7 @@ func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, requestID
 			err = json.Unmarshal(resp, &sr)
 			if err != nil {
 				logprint(ERROR, requestID, ": failed to JSON decode server response:", err.Error())
+				cancelQRCode(sc.qrQuits[requestID], onQRCodeFunc)
 				sc.funcOnResponse(requestID, internalErrorMsg, err.Error())
 				return
 			}
@@ -251,14 +318,17 @@ func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, requestID
 				time.Sleep(time.Duration(sc.cfg.PollDelay) * time.Millisecond)
 			case "failed": // "failed" or "complete"
 				logprint(DEBUG, requestID, ": status changed to", sr.HintCode)
+				cancelQRCode(sc.qrQuits[requestID], onQRCodeFunc)
 				sc.funcOnResponse(requestID, sr.Status, sr.HintCode)
 				return
 			case "complete":
 				logprint(DEBUG, requestID, ": status changed to", sr.HintCode)
+				cancelQRCode(sc.qrQuits[requestID], onQRCodeFunc)
 				sc.funcOnResponse(requestID, sr.Status, sr.CompletionData.User.Name)
 				return
 			default:
 				logprint(DEBUG, requestID, ": unknown status", sr.Status, "in response from server")
+				cancelQRCode(sc.qrQuits[requestID], onQRCodeFunc)
 				sc.funcOnResponse(requestID, internalErrorMsg, "unknown status in response from server")
 				return
 			}
@@ -293,11 +363,13 @@ func (sc *Connection) transmitRequest(reqType string, jsonStr []byte) (int, []by
 // verify that all parameters are correct. If so, a authSignRequestRequirements struct is
 // filled and the pointer to that struct is returned
 func validateRequirements(req *Requirements) error {
-	if _, err := strconv.Atoi(req.PersonalNumber); err != nil {
-		return errors.New("parameter personalNumber malformed")
-	}
-	if len(req.PersonalNumber) > 0 && len(req.PersonalNumber) != 12 {
-		return errors.New("parameter personalNumber must be 12 digits long")
+	if len(req.PersonalNumber) > 0 {
+		if _, err := strconv.Atoi(req.PersonalNumber); err != nil {
+			return errors.New("parameter personalNumber malformed")
+		}
+		if len(req.PersonalNumber) > 0 && len(req.PersonalNumber) != 12 {
+			return errors.New("parameter personalNumber must be 12 digits long")
+		}
 	}
 	if len(req.UserNonVisibleData) > 200000 {
 		return errors.New("parameter userNonVisibleData data too long")
@@ -326,6 +398,8 @@ type authSignRequest struct {
 
 type serverResponse struct {
 	AutoStartToken string `json:"autoStartToken,omitempty"` // Format: "131daac9-16c6-4618-beb0-365768f37288"
+	QRStartToken   string `json:"qrStartToken,omitempty"`
+	QRStartSecret  string `json:"qrStartSecret,omitempty"`
 	OrderRef       string `json:"orderRef,omitempty"`
 	Status         string `json:"status"`
 	HintCode       string `json:"hintCode,omitempty"`

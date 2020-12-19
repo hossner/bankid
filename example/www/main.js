@@ -12,6 +12,8 @@ function loaded(){
             stat.textContent = msg.action
             if (msg.action == "error"){
                 longstat.textContent = msg.value
+            } else if (msg.action == "qrcode") {
+                qrImg.src = "data:image/png;base64," + msg.value;
             } else {
                 longstat.textContent = ""
             }
@@ -26,4 +28,9 @@ function loaded(){
 function sendPnr(nr){
     console.log(nr)
     bidSocket.send(JSON.stringify({action:"pnrAuth", value:nr, id:sessID}))
+}
+
+function getqrcode(){
+    console.log("Using QR code")
+    bidSocket.send(JSON.stringify({action:"qrCode", value:"", id:sessID}))
 }

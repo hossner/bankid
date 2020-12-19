@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"net"
@@ -147,6 +148,11 @@ func socketReader(wsConn *websocket.Conn, id, ip string) {
 	}
 }
 
+func onQrGen(qrBytes []byte, reqID string) {
+	newMsg := wsMsg{Action: "qrcode", Value: base64.StdEncoding.EncodeToString(qrBytes), SessID: reqID}
+	sessMap[reqID] <- &newMsg
+}
+
 // Poll the queueFromClient and send incomming messages to the server
 func handleClients(bConn *bankid.Connection) {
 	for {
@@ -155,7 +161,10 @@ func handleClients(bConn *bankid.Connection) {
 		case "pnrAuth":
 			// The web client sent a pnr and requests an authentication
 			reqs := bankid.Requirements{PersonalNumber: msg.Value}
-			bConn.SendRequest(msg.IPAddr, msg.SessID, "", &reqs)
+			bConn.SendRequest(msg.IPAddr, msg.SessID, "", &reqs, nil)
+		case "qrCode":
+			reqs := bankid.Requirements{TokenStartRequired: true}
+			bConn.SendRequest(msg.IPAddr, msg.SessID, "", &reqs, onQrGen)
 		default:
 			log.Println("Unknown command:", "\""+msg.Action+"\"")
 		}

@@ -13,7 +13,7 @@
 			"Content-type":"application/json"
 		}
 	},
-	"serviceUrl":"https://appapi2.test.bankid.com/rp/v5",
+	"serviceUrl":"https://appapi2.test.bankid.com/rp/v5.1",
 	"pollDelay":2000,
 	"logFile":"/tmp/bankid.log",
 	"keyValueStore":"bankid_kvs.db",
