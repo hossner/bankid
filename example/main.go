@@ -42,6 +42,8 @@ func main() {
 
 	// Set up handler for the websocket request from client
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		// Accept upgrade from any origin (don't do this in a production environment!)
+		upgrader.CheckOrigin = func(r *http.Request) bool { return true }
 		// Upgrade the http request to a websocket
 		var conn, err = upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -71,7 +73,7 @@ func main() {
 
 	// Start web server, listening to port 8080
 	log.Println("Listening to port 8080...")
-	http.ListenAndServe("127.0.0.1:8080", nil)
+	http.ListenAndServe(":8080", nil)
 }
 
 // Incomming messages from the BankID connection are put on the queue to the client
