@@ -1,7 +1,7 @@
 # bankid
-A Golang wrapper around the Swedish BankID appapi v5
+A Golang wrapper around the Swedish BankID appapi v5.1
 
-bankid.go provides a minimal higher-level wrapper around the Swedish BankID's v.5 appapi.
+bankid.go provides a minimal higher-level wrapper around the Swedish BankID's v.5.1 appapi.
 
 ## Note!
 This library is still under heavy construction, and you are **not!** encouraged to use it in a production environment!
