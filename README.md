@@ -4,7 +4,7 @@ A Golang wrapper around the Swedish BankID appapi v5.1
 bankid.go provides a minimal higher-level wrapper around the Swedish BankID's v.5.1 appapi.
 
 ## Note!
-This library is still under heavy construction, and you are **not!** encouraged to use it in a production environment!
+This library is still under construction, and you are **not!** encouraged to use it in a production environment!
 
 ## Installation
 ```shell
@@ -30,7 +30,7 @@ defer bankid.Close
 sessionID := conn.SendRequest("192.168.0.1", "", "", nil, nil)
 ```
 
-Now, at every status update of the request the call back function ```myCallBack``` is called, allowing for handling the session accordingly.
+Now, at every status update of the request the call back function ```myCallBack``` is called, allowing for handling of the session accordingly.
 
 If required, more customization is possible through the configuration file (path provided as argument to the ```bankid.New``` function) and/or a ```bankid.Requirement``` struct, provided as argument to the bankid.Connection.SendRequest method at each request.
 
@@ -59,7 +59,7 @@ Path to log file to be used by the library. If this value is set to empty string
 Integer value 0-5 to enable/disable logging. A value of 0 disables logging, 1 equals debug logging, 2 warnings, 3 errors, 4 and 5 critical log messages. Note that the log is not rotated in this version, so logging should only be enabled in debug purposes.
 
 ## QR codes
-For use with QR code(s), an aditional call back function has to be declared, and sent as the last parameter to the ```SendRequest``` function. This call back function with then be called every second, for as long as the transaction is outstanding, with a byte array in PNG format containing a QR code to display to the user.
+For use with QR code(s), an aditional call back function has to be declared, and sent as the last parameter to the ```SendRequest``` function. This call back function will then be called every second, for as long as the transaction is outstanding, providing a QR code to display to the user. The QR code is in PNG format in a byte array.
 
 Also note that the ```TokenStartRequred``` parameter must be set in the Auth/Sign requirements in order to enable the use of QR codes. Below is an example of how this could be done.
 
@@ -87,7 +87,7 @@ defer bankid.Close
 sessionID := conn.SendRequest("192.168.0.1", "", "", &bankid.Requirements{TokenStartReqired: true}, onQRCodeRenewal)
 ```
 
-Now, at every status update of the request the call back function ```myCallBack``` is called just as before, allowing for handling the session accordingly, but as long as this request is outstanding, the call back function ```onQRCodeRenewal``` will also be called every second, providing a PNG formatted byte array to be displayed for the user.
+Now, at every status update of the request the call back function ```myCallBack``` is called just as before, allowing for handling of the session accordingly. As long as the request is outstanding, the call back function ```onQRCodeRenewal``` will in addition also be called every second, providing a PNG formatted byte array to be displayed for the user.
 
 ## Formatted text to sign
 The support for formatted ```userVisibleData``` in the BankID RPv5.1 specifications is not yet implemented in this library.
@@ -120,6 +120,6 @@ If set to ```true``` users of iOS and Android devices may use fingerprint for au
 See the [example folder](https://github.com/hossner/bankid/tree/master/example).
 
 
-## BankID appapi v5 documentation
-See [https://bankid.com/rp/info](https://www.bankid.com/rp/info) for more information about the appapi.
+## BankID appapi v5.1 documentation
+See [https://bankid.com/rp/info](https://www.bankid.com/rp/info) for more information about the BankID appapi.
 
