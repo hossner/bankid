@@ -25,12 +25,12 @@ function myCallBack(sessionId, message, details string){
 conn := bankid.New("", myCallBack)
 defer bankid.Close
 ```
-3. For each request to the server, call the bankid.Connection.SendRequest method. Note that the remote client's IP address must be provided as the first argument.
+3. For each request from the client, call the bankid.Connection.SendRequest method. Note that the remote client's IP address must be provided as the first argument.
 ```go
-sessionID := conn.SendRequest("192.168.0.1", "", "", nil)
+sessionID := conn.SendRequest("192.168.0.1", "", "", nil, nil)
 ```
 
-Now, at every status update of the request, the call back function is called, allowing for handling the session accordingly.
+Now, at every status update of the request the call back function ```myCallBack``` is called, allowing for handling the session accordingly.
 
 If required, more customization is possible through the configuration file (path provided as argument to the ```bankid.New``` function) and/or a ```bankid.Requirement``` struct, provided as argument to the bankid.Connection.SendRequest method at each request.
 
@@ -58,6 +58,40 @@ Path to log file to be used by the library. If this value is set to empty string
 ### ```logLevel```
 Integer value 0-5 to enable/disable logging. A value of 0 disables logging, 1 equals debug logging, 2 warnings, 3 errors, 4 and 5 critical log messages. Note that the log is not rotated in this version, so logging should only be enabled in debug purposes.
 
+## QR codes
+For use with QR code(s), an aditional call back function has to be declared, and sent as the last parameter to the ```SendRequest``` function. This call back function with then be called every second, for as long as the transaction is outstanding, with a byte array in PNG format containing a QR code to display to the user.
+
+Also note that the ```TokenStartRequred``` parameter must be set in the Auth/Sign requirements in order to enable the use of QR codes. Below is an example of how this could be done.
+
+1. Define a call back function
+
+```go
+function myCallBack(sessionId, message, details string){
+    fmt.Println("Session ID:", sessionId, " sent message:", message, " with the details:", details)
+}
+```
+2. Define a call back function for receiving QR codes every second, to be displayed to the user
+```go
+function onQRCodeRenewal(pngImg []byte, sessionID string){
+    fmt.Println("Session ID:", sessionId, "received data for an updated QR code")
+    // Update the display/page with the received pngImg data
+}
+```
+3. Create an instance of the bankid.Connection struct with the call back function as argument.
+```go
+conn := bankid.New("", myCallBack)
+defer bankid.Close
+```
+4. For each request from the client, call the bankid.Connection.SendRequest method. Note that the remote client's IP address must be provided as the first argument, and to enable the use of QR code(s) a pointer to a ```Requirements``` struct and a ```FOnNewQRCode``` call back function is also provided as arguments.
+```go
+sessionID := conn.SendRequest("192.168.0.1", "", "", &bankid.Requirements{TokenStartReqired: true}, onQRCodeRenewal)
+```
+
+Now, at every status update of the request the call back function ```myCallBack``` is called just as before, allowing for handling the session accordingly, but as long as this request is outstanding, the call back function ```onQRCodeRenewal``` will also be called every second, providing a PNG formatted byte array to be displayed for the user.
+
+## Formatted text to sign
+The support for formatted ```userVisibleData``` in the BankID RPv5.1 specifications is not yet implemented in this library.
+
 ## Auth/Sign requirements
 Specific requirements may be needed at Auth or Sign requests. These requirements can be provided as a pointer to a ```Requirement``` struct as an argument to the ```SendRequest``` method. The different members of the struct are briefly described below. For more information about the different requirements, plase see the [official documentation](https://www.bankid.com/rp/info).
 
@@ -76,8 +110,8 @@ This member can be used to force usage of the diffent types of BankID (file base
 ### ```IssuerCN```
 Not needed in normal usage, please see the [official documentation](https://www.bankid.com/rp/info) for more information.
 
-### ```AutoStartTokenRequired```
-This can be set to ```true``` if it is important the user's client was autostarted using the ```autoStartToken```.
+### ```TokenStartRequired```
+This can be set to ```true``` either to be able to autostart the BankID App on the same device, through app switching using the ```autoStartToken```, or to allow the usage of QR codes. This library only supports usage of "animated", or continuously updated, QR codes. See ```FOnNewQRCode``` for more information.
 
 ### ```AllowFingerprint```
 If set to ```true``` users of iOS and Android devices may use fingerprint for authentication and signing, if the device supports it, if the user has configured the device to use it, and if the user has configured BankID to use it.
