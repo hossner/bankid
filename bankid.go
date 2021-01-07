@@ -1,6 +1,6 @@
 package bankid
 
-// Package bankid provide structs and methods to access the Swedish BankID service through the v.5 appapi.
+// Package bankid provide structs and methods to access the Swedish BankID service through the v.5.1 appapi.
 
 import (
 	"bytes"
@@ -199,17 +199,6 @@ func (sc *Connection) generateQRCode(qr1, qr2, requestID string, fOnCode FOnNewQ
 		return nil
 	}
 
-	/*
-		qr1 = "67df3917-fa0d-44e5-b327-edcc928297f8"
-		qr2 = "d28db9a7-4cde-429e-a983-359be676944c"
-		nr := 0
-		var png []byte
-		h := hmac.New(sha256.New, []byte(qr2))
-		h.Write([]byte(strconv.Itoa(nr)))
-		png, _ = qrcode.Encode("bankid."+qr1+"."+strconv.Itoa(nr)+"."+hex.EncodeToString(h.Sum(nil)), qrcode.Low, -5)
-		fOnCode(png, requestID)
-		return nil
-	*/
 	nr := 0
 	ticker := time.NewTicker(1 * time.Second)
 	quit := make(chan struct{})
