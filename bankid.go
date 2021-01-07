@@ -58,6 +58,7 @@ type Connection struct {
 	httpClient     *http.Client
 	transQueues    map[string]chan byte
 	orderRefs      map[string]string
+	autoStarts     map[string]string
 	qrQuits        map[string]chan struct{}
 	mu             sync.Mutex
 }
@@ -114,6 +115,7 @@ func New(configFileName string, responseCallBack FOnResponse) (*Connection, erro
 	sc.transQueues = make(map[string]chan byte)
 	sc.orderRefs = make(map[string]string)
 	sc.qrQuits = make(map[string]chan struct{})
+	sc.autoStarts = make(map[string]string)
 	return &sc, nil
 }
 
@@ -141,6 +143,26 @@ func (sc *Connection) CancelRequest(requestID string) {
 	}
 	delete(sc.orderRefs, requestID)
 	sc.transQueues[requestID] <- 1
+}
+
+// GenerateQRCode generates a QR code based on the request ID received through the SendRequest function. The result is an PNG file
+// returned as a byte slice. Note that if an FOnNewQRCode function was passed as argument to the SendRequest function - meaning that
+// animated QR codes are to be used - the GenerateQRCode function will return an empty byte slice and an error
+func (sc *Connection) GenerateQRCode(reqID string, size int) ([]byte, error) {
+	if sc.qrQuits[reqID] != nil {
+		return []byte{}, errors.New("Animated QR codes are used for this request")
+	}
+	as, ok := sc.autoStarts[reqID]
+	if !ok {
+		return []byte{}, errors.New("Provided Request ID not found")
+	}
+	var png []byte
+	png, err := qrcode.Encode("bankid:///?autostarttoken="+as, qrcode.Low, size)
+	if err != nil {
+		logprint(ERROR, "", ": failed to generate static QR code", err.Error())
+		return []byte{}, errors.New("Failed to generate QR code")
+	}
+	return png, nil
 }
 
 // Close the Connection
@@ -261,6 +283,7 @@ func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, requestID
 	sr.Status = "pending"
 	sr.HintCode = ""
 	oldHint := sr.HintCode // Should be ""
+	sc.autoStarts[requestID] = sr.AutoStartToken
 	sc.funcOnResponse(requestID, "sent", sr.AutoStartToken)
 	if onQRCodeFunc != nil {
 		sc.qrQuits[requestID] = sc.generateQRCode(sr.QRStartToken, sr.QRStartSecret, requestID, onQRCodeFunc)
@@ -324,7 +347,7 @@ func (sc *Connection) handleAuthSignRequest(endUserIP, textToBeSigned, requestID
 			case "complete":
 				logprint(DEBUG, requestID, ": status changed to", sr.HintCode)
 				cancelQRCode(sc.qrQuits[requestID], onQRCodeFunc)
-				sc.funcOnResponse(requestID, sr.Status, sr.CompletionData.User.Name)
+				sc.funcOnResponse(requestID, sr.Status, sr.CompletionData.User.Name+"\n"+sr.CompletionData.User.PersonalNumber)
 				return
 			default:
 				logprint(DEBUG, requestID, ": unknown status", sr.Status, "in response from server")

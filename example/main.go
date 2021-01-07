@@ -84,9 +84,9 @@ func callBack(reqID, msg, detail string) {
 			Non error messages:
 				'sent': autoStartToken returned as detail
 				'cancelled': Caller cancelled the transaction
-				'outstandingTransaction':
-				'noClient':
-				'started':
+				'outstandingTransaction': Waiting for user to start BankID client
+				'noClient': Client has not yet received the transaction
+				'started': Client started, user is handling the transaction
 				'userSign':
 
 			Error messages:
@@ -163,8 +163,9 @@ func handleClients(bConn *bankid.Connection) {
 			reqs := bankid.Requirements{PersonalNumber: msg.Value}
 			bConn.SendRequest(msg.IPAddr, msg.SessID, "", &reqs, nil)
 		case "qrCode":
-			reqs := bankid.Requirements{TokenStartRequired: true}
-			bConn.SendRequest(msg.IPAddr, msg.SessID, "", &reqs, onQrGen)
+			// reqs := bankid.Requirements{TokenStartRequired: true}
+			// bConn.SendRequest(msg.IPAddr, msg.SessID, "", &reqs, onQrGen)
+			bConn.SendRequest(msg.IPAddr, msg.SessID, "", &bankid.Requirements{TokenStartRequired: true}, onQrGen)
 		default:
 			log.Println("Unknown command:", "\""+msg.Action+"\"")
 		}
